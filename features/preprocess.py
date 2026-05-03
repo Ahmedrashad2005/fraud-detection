@@ -24,7 +24,6 @@ from config.params import (
 from config.settings import TEST_SIZE, RANDOM_STATE
 
 from data.load_data import load_raw_data
-from features.preprocess import preprocess
 from features.build_features import build_features
 
 
