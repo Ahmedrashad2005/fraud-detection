@@ -4,10 +4,6 @@ import pandas as pd
 import numpy as np
 import joblib
 
-from pathlib import Path
-import sys
-sys.path.append(str(Path(__file__).parent.parent))
-
 from config.paths import ARTIFACTS_DIR
 
 
@@ -48,14 +44,12 @@ def drop_high_missing(df, threshold=0.9):
 def fill_missing_train(df):
     medians = {}
 
-    # Numeric
     num_cols = df.select_dtypes(include=np.number).columns
     for col in num_cols:
         med = df[col].median()
         df[col] = df[col].fillna(med)
         medians[col] = med
 
-    # Categorical
     cat_cols = df.select_dtypes(include='object').columns
     for col in cat_cols:
         df[col] = df[col].fillna("Unknown")
@@ -101,8 +95,6 @@ def encode_inference(df, encoders):
     for col, mapping in encoders.items():
         if col in df.columns:
             df[col] = df[col].astype(str).map(mapping)
-
-            # unseen values
             df[col] = df[col].fillna(-1)
 
     print("✅ Encoding applied (inference)")
@@ -129,78 +121,73 @@ def reduce_memory(df):
 
 
 # ==============================
-# TRAIN PIPELINE
+# MAIN PREPROCESS FUNCTION
 # ==============================
 
-def preprocess_train(df):
+def preprocess(df, fit=True, encoders=None, cols_to_drop=None):
     print("\n" + "="*50)
-    print("TRAIN PREPROCESSING")
+    print("PREPROCESS PIPELINE")
     print("="*50)
 
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 
+    # 1. drop columns
     df = drop_useless_cols(df)
     df = drop_high_missing(df)
 
-    df, medians  = fill_missing_train(df)
-    df, encoders = encode_train(df)
+    if fit:
+        # TRAIN MODE
+        df, medians  = fill_missing_train(df)
+        df, encoders = encode_train(df)
 
-    df = reduce_memory(df)
+        # save artifacts
+        joblib.dump(encoders, ENCODERS_PATH)
+        joblib.dump(medians, MEDIANS_PATH)
+        joblib.dump(df.columns.tolist(), COLUMNS_PATH)
 
-    # save artifacts
-    joblib.dump(encoders, ENCODERS_PATH)
-    joblib.dump(medians, MEDIANS_PATH)
-    joblib.dump(df.columns.tolist(), COLUMNS_PATH)
+        print("💾 Artifacts saved")
 
-    print("💾 Artifacts saved")
+        df = reduce_memory(df)
 
-    print(f"Final shape: {df.shape}")
-    print("="*50)
+        print(f"Final shape: {df.shape}")
+        print("="*50)
 
-    return df
+        return df, encoders, []
 
+    else:
+        # INFERENCE MODE
 
-# ==============================
-# INFERENCE PIPELINE
-# ==============================
+        # لو encoders جاي من train استخدمه
+        if encoders is None:
+            encoders = joblib.load(ENCODERS_PATH)
 
-def preprocess_inference(df):
-    print("\n" + "="*50)
-    print("INFERENCE PREPROCESSING")
-    print("="*50)
+        medians  = joblib.load(MEDIANS_PATH)
+        columns  = joblib.load(COLUMNS_PATH)
 
-    encoders = joblib.load(ENCODERS_PATH)
-    medians  = joblib.load(MEDIANS_PATH)
-    columns  = joblib.load(COLUMNS_PATH)
+        df = fill_missing_inference(df, medians)
+        df = encode_inference(df, encoders)
 
-    df = drop_useless_cols(df)
+        # align columns
+        for col in columns:
+            if col not in df.columns:
+                df[col] = 0
 
-    df = fill_missing_inference(df, medians)
-    df = encode_inference(df, encoders)
+        df = df[columns]
 
-    # align columns
-    for col in columns:
-        if col not in df.columns:
-            df[col] = 0
+        df = reduce_memory(df)
 
-    df = df[columns]
+        print(f"Final shape: {df.shape}")
+        print("="*50)
 
-    df = reduce_memory(df)
-
-    print(f"Final shape: {df.shape}")
-    print("="*50)
-
-    return df
+        return df, None, None
 
 
 # ==============================
-# TEST RUN
+# TEST
 # ==============================
 
 if __name__ == "__main__":
-    from data.load_data import load_raw_data, save_processed
+    from data.load_data import load_raw_data
 
     df = load_raw_data()
-    df = preprocess_train(df)
-
-    save_processed(df, "preprocessed_train.csv")
+    df, _, _ = preprocess(df, fit=True)
