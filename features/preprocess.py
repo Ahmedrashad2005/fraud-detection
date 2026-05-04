@@ -1,246 +1,206 @@
-# models/train.py
+# features/preprocess.py
 
 import pandas as pd
 import numpy as np
 import joblib
 
-from xgboost import XGBClassifier
-from lightgbm import LGBMClassifier
-from sklearn.ensemble import IsolationForest
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import (
-    roc_auc_score, f1_score,
-    classification_report, confusion_matrix
-)
+from pathlib import Path
+import sys
+sys.path.append(str(Path(__file__).parent.parent))
 
 from config.paths import ARTIFACTS_DIR
-from config.params import (
-    XGB_HEAVY_PARAMS,
-    XGB_LIGHT_PARAMS,
-    LGBM_HEAVY_PARAMS,
-    LGBM_LIGHT_PARAMS,
-    ISO_PARAMS
-)
-from config.settings import TEST_SIZE, RANDOM_STATE
-
-from data.load_data import load_raw_data
-from features.build_features import build_features
 
 
-TARGET = "isFraud"
-THRESHOLD = 0.3
+# ==============================
+# CONFIG
+# ==============================
+
+DROP_COLS = ['TransactionID', 'TransactionDT']
+
+ENCODERS_PATH = ARTIFACTS_DIR / "encoders.pkl"
+MEDIANS_PATH  = ARTIFACTS_DIR / "medians.pkl"
+COLUMNS_PATH  = ARTIFACTS_DIR / "feature_columns.pkl"
 
 
-# ================================================================
-# 1. Split
-# ================================================================
-def split_data(df):
-    print("\n" + "=" * 50)
-    print("SPLIT DATA")
-    print("=" * 50)
+# ==============================
+# BASIC CLEANING
+# ==============================
 
-    X = df.drop(columns=[TARGET])
-    y = df[TARGET]
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y,
-        test_size=TEST_SIZE,
-        random_state=RANDOM_STATE,
-        stratify=y
-    )
-
-    print(f"Train : {X_train.shape} | Fraud: {y_train.sum():,}")
-    print(f"Test  : {X_test.shape}  | Fraud: {y_test.sum():,}")
-
-    return X_train, X_test, y_train, y_test
+def drop_useless_cols(df):
+    cols = [c for c in DROP_COLS if c in df.columns]
+    df = df.drop(columns=cols)
+    print(f"✅ Dropped {len(cols)} useless columns")
+    return df
 
 
-# ================================================================
-# 2. Preprocess + Features
-# ================================================================
-def process_data(X_train, X_test):
-    print("\n" + "=" * 50)
-    print("PREPROCESS + FEATURES")
-    print("=" * 50)
-
-    # fit on train
-    X_train, encoders, dropped_cols = preprocess(X_train, fit=True)
-
-    # transform test
-    X_test, _, _ = preprocess(
-        X_test,
-        fit=False,
-        encoders=encoders,
-        cols_to_drop=dropped_cols
-    )
-
-    # feature engineering
-    X_train = build_features(X_train)
-    X_test  = build_features(X_test)
-
-    # align columns
-    X_test = X_test.reindex(columns=X_train.columns, fill_value=0)
-
-    print(f"✅ Train shape: {X_train.shape}")
-    print(f"✅ Test  shape: {X_test.shape}")
-
-    return X_train, X_test, encoders, dropped_cols
+def drop_high_missing(df, threshold=0.9):
+    missing_rate = df.isnull().mean()
+    high_missing = missing_rate[missing_rate > threshold].index.tolist()
+    df = df.drop(columns=high_missing)
+    print(f"✅ Dropped {len(high_missing)} high-missing columns")
+    return df
 
 
-# ================================================================
-# 3. Evaluation
-# ================================================================
-def evaluate(model, X, y, name="Model"):
-    probs = model.predict_proba(X)[:, 1]
-    preds = (probs > THRESHOLD).astype(int)
+# ==============================
+# MISSING VALUES
+# ==============================
 
-    print("\n" + "=" * 50)
-    print(f"📊 {name}")
-    print("=" * 50)
+def fill_missing_train(df):
+    medians = {}
 
-    print(f"AUC : {roc_auc_score(y, probs):.4f}")
-    print(f"F1  : {f1_score(y, preds):.4f}")
+    # Numeric
+    num_cols = df.select_dtypes(include=np.number).columns
+    for col in num_cols:
+        med = df[col].median()
+        df[col] = df[col].fillna(med)
+        medians[col] = med
 
-    print("\nConfusion Matrix:")
-    print(confusion_matrix(y, preds))
+    # Categorical
+    cat_cols = df.select_dtypes(include='object').columns
+    for col in cat_cols:
+        df[col] = df[col].fillna("Unknown")
 
-    print("\nClassification Report:")
-    print(classification_report(y, preds))
-
-
-# ================================================================
-# 4. Isolation Forest
-# ================================================================
-def train_iso(X_train):
-    print("\nTraining Isolation Forest...")
-    iso = IsolationForest(**ISO_PARAMS)
-    iso.fit(X_train)
-    return iso
+    print("✅ Missing values filled (train)")
+    return df, medians
 
 
-# ================================================================
-# 5. Heavy Models
-# ================================================================
-def train_heavy(X_train, y_train, X_test, y_test):
-    print("\n🚀 Training HEAVY models...")
+def fill_missing_inference(df, medians):
+    for col, med in medians.items():
+        if col in df.columns:
+            df[col] = df[col].fillna(med)
 
-    xgb = XGBClassifier(**XGB_HEAVY_PARAMS)
-    xgb.fit(X_train, y_train)
+    cat_cols = df.select_dtypes(include='object').columns
+    for col in cat_cols:
+        df[col] = df[col].fillna("Unknown")
 
-    lgbm = LGBMClassifier(**LGBM_HEAVY_PARAMS)
-    lgbm.fit(X_train, y_train)
-
-    evaluate(xgb, X_test, y_test, "XGBoost Heavy")
-    evaluate(lgbm, X_test, y_test, "LightGBM Heavy")
-
-    return xgb, lgbm
+    print("✅ Missing values filled (inference)")
+    return df
 
 
-# ================================================================
-# 6. Light Models (Top 35 dynamic)
-# ================================================================
-def train_light(X_train, y_train, X_test, y_test, xgb_heavy):
-    print("\n⚡ Training LIGHT models...")
+# ==============================
+# ENCODING
+# ==============================
 
-    importances = xgb_heavy.feature_importances_
-    top_idx = np.argsort(importances)[-35:]
-    features = X_train.columns[top_idx].tolist()
+def encode_train(df):
+    encoders = {}
 
-    print(f"Top features: {len(features)}")
+    cat_cols = df.select_dtypes(include='object').columns
 
-    X_tr = X_train[features]
-    X_te = X_test[features]
+    for col in cat_cols:
+        uniques = df[col].astype(str).unique().tolist()
+        mapping = {val: idx for idx, val in enumerate(uniques)}
 
-    xgb_l = XGBClassifier(**XGB_LIGHT_PARAMS)
-    xgb_l.fit(X_tr, y_train)
+        df[col] = df[col].astype(str).map(mapping)
+        encoders[col] = mapping
 
-    lgbm_l = LGBMClassifier(**LGBM_LIGHT_PARAMS)
-    lgbm_l.fit(X_tr, y_train)
-
-    evaluate(xgb_l, X_te, y_test, "XGBoost Light")
-    evaluate(lgbm_l, X_te, y_test, "LightGBM Light")
-
-    return xgb_l, lgbm_l, features
+    print(f"✅ Encoded {len(encoders)} categorical columns")
+    return df, encoders
 
 
-# ================================================================
-# 7. Save Artifacts
-# ================================================================
-def save_all(models,
-             encoders,
-             dropped_cols,
-             all_features,
-             light_features,
-             X_train):
+def encode_inference(df, encoders):
+    for col, mapping in encoders.items():
+        if col in df.columns:
+            df[col] = df[col].astype(str).map(mapping)
 
-    print("\n💾 Saving artifacts...")
+            # unseen values
+            df[col] = df[col].fillna(-1)
+
+    print("✅ Encoding applied (inference)")
+    return df
+
+
+# ==============================
+# MEMORY OPTIMIZATION
+# ==============================
+
+def reduce_memory(df):
+    before = df.memory_usage().sum() / 1e6
+
+    for col in df.select_dtypes(include=['int64']).columns:
+        df[col] = pd.to_numeric(df[col], downcast='integer')
+
+    for col in df.select_dtypes(include=['float64']).columns:
+        df[col] = pd.to_numeric(df[col], downcast='float')
+
+    after = df.memory_usage().sum() / 1e6
+
+    print(f"✅ Memory: {before:.1f} → {after:.1f} MB")
+    return df
+
+
+# ==============================
+# TRAIN PIPELINE
+# ==============================
+
+def preprocess_train(df):
+    print("\n" + "="*50)
+    print("TRAIN PREPROCESSING")
+    print("="*50)
+
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # models
-    for name, model in models.items():
-        joblib.dump(model, ARTIFACTS_DIR / f"{name}.pkl")
+    df = drop_useless_cols(df)
+    df = drop_high_missing(df)
 
-    # preprocessing artifacts
-    joblib.dump(encoders, ARTIFACTS_DIR / "encoders.pkl")
-    joblib.dump(dropped_cols, ARTIFACTS_DIR / "dropped_cols.pkl")
+    df, medians  = fill_missing_train(df)
+    df, encoders = encode_train(df)
 
-    # feature lists
-    joblib.dump(all_features, ARTIFACTS_DIR / "all_features.pkl")
-    joblib.dump(light_features, ARTIFACTS_DIR / "top35_features.pkl")
+    df = reduce_memory(df)
 
-    # medians
-    medians = X_train.median().to_dict()
-    joblib.dump(medians, ARTIFACTS_DIR / "feature_medians.pkl")
+    # save artifacts
+    joblib.dump(encoders, ENCODERS_PATH)
+    joblib.dump(medians, MEDIANS_PATH)
+    joblib.dump(df.columns.tolist(), COLUMNS_PATH)
 
-    print("✅ All artifacts saved!")
+    print("💾 Artifacts saved")
+
+    print(f"Final shape: {df.shape}")
+    print("="*50)
+
+    return df
 
 
-# ================================================================
-# MAIN
-# ================================================================
-def main():
-    print("\n" + "=" * 50)
-    print("TRAINING PIPELINE")
-    print("=" * 50)
+# ==============================
+# INFERENCE PIPELINE
+# ==============================
 
-    # 1. load
-    df = load_raw_data()
+def preprocess_inference(df):
+    print("\n" + "="*50)
+    print("INFERENCE PREPROCESSING")
+    print("="*50)
 
-    # 2. split
-    X_train, X_test, y_train, y_test = split_data(df)
+    encoders = joblib.load(ENCODERS_PATH)
+    medians  = joblib.load(MEDIANS_PATH)
+    columns  = joblib.load(COLUMNS_PATH)
 
-    # 3. preprocess
-    X_train, X_test, encoders, dropped_cols = process_data(X_train, X_test)
+    df = drop_useless_cols(df)
 
-    # 4. iso
-    iso = train_iso(X_train)
+    df = fill_missing_inference(df, medians)
+    df = encode_inference(df, encoders)
 
-    # 5. heavy
-    xgb, lgbm = train_heavy(X_train, y_train, X_test, y_test)
+    # align columns
+    for col in columns:
+        if col not in df.columns:
+            df[col] = 0
 
-    # 6. light
-    xgb_l, lgbm_l, light_features = train_light(
-        X_train, y_train, X_test, y_test, xgb
-    )
+    df = df[columns]
 
-    # 7. save
-    save_all(
-        {
-            "xgb_heavy": xgb,
-            "lgbm_heavy": lgbm,
-            "iso_forest": iso,
-            "xgb_light": xgb_l,
-            "lgbm_light": lgbm_l
-        },
-        encoders,
-        dropped_cols,
-        X_train.columns.tolist(),
-        light_features,
-        X_train
-    )
+    df = reduce_memory(df)
 
-    print("\n🎉 TRAINING COMPLETE!")
+    print(f"Final shape: {df.shape}")
+    print("="*50)
 
+    return df
+
+
+# ==============================
+# TEST RUN
+# ==============================
 
 if __name__ == "__main__":
-    main()
+    from data.load_data import load_raw_data, save_processed
+
+    df = load_raw_data()
+    df = preprocess_train(df)
+
+    save_processed(df, "preprocessed_train.csv")
