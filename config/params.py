@@ -1,7 +1,7 @@
 # config/params.py
 
 # scale_pos_weight = neg/pos = 569877/20663 ≈ 27
-FRAUD_SCALE_WEIGHT = 27
+FRAUD_SCALE_WEIGHT = 25
 
 XGB_HEAVY_PARAMS = {
     "n_estimators":      500,

@@ -1,22 +1,38 @@
-# General
+# ============================================================
+# GENERAL CONFIG
+# ============================================================
+
 APP_NAME     = "Fraud Detection System"
 VERSION      = "1.0.0"
 RANDOM_STATE = 42
 TEST_SIZE    = 0.2
 
-# Model Weights
+
+# ============================================================
+# MODEL WEIGHTS (for ensemble)
+# ============================================================
+
 MODEL_WEIGHTS = {
-    "xgb": 0.45,
-    "lgbm": 0.35,
-    "iso": 0.20
+    "xgb": 0.5,
+    "lgbm": 0.4,
+    "iso": 0.1
 }
 
-# Thresholds
-PREDICTION_THRESHOLD = 0.3
 
+# ============================================================
+# THRESHOLDS
+# ============================================================
+
+# Main prediction threshold (binary decision)
+PREDICTION_THRESHOLD = 0.5
+
+# Optional: review layer (bank-style decision)
+REVIEW_THRESHOLD = 0.6
+
+# Risk levels (for UI / business logic)
 RISK_THRESHOLDS = {
-    "high": 0.7,
-    "medium": 0.4
+    "high": 0.75,
+    "medium": 0.5
 }
 
 RISK_LABELS = {
@@ -25,19 +41,36 @@ RISK_LABELS = {
     "low": "LOW RISK"
 }
 
-# Database
+
+# ============================================================
+# DATABASE
+# ============================================================
+
 DB_NAME      = "fraud_detection.db"
 DB_PATH      = f"artifacts/{DB_NAME}"
+
 DB_TABLE_TX  = "transactions"
 DB_TABLE_LOG = "prediction_logs"
 
-# Dashboard
-REFRESH_RATE     = 30
+
+# ============================================================
+# DASHBOARD
+# ============================================================
+
+REFRESH_RATE     = 30   # seconds
 MAX_ROWS_DISPLAY = 100
 
-# Logging
+
+# ============================================================
+# LOGGING
+# ============================================================
+
 LOG_LEVEL = "INFO"
 
-# MLOps
+
+# ============================================================
+# MLOPS
+# ============================================================
+
 DRIFT_THRESHOLD = 0.85
 MLFLOW_EXP_NAME = "fraud-detection"
