@@ -16,7 +16,7 @@ TEST_ID  = RAW_DIR / "test_identity.csv"
 
 # Artifacts
 ARTIFACTS_DIR = BASE_DIR / "artifacts"
-MODELS_DIR    = ARTIFACTS_DIR / "models"
+MODELS_DIR    = ARTIFACTS_DIR 
 LOGS_DIR      = ARTIFACTS_DIR / "logs"
 
 # Models
